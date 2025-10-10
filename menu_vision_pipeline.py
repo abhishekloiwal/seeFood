@@ -28,6 +28,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 from typing import Any, Dict, List
 
+os.environ.setdefault("GOOGLE_CLOUD_DISABLE_GRPC_ALTS", "true")
+
 import google.generativeai as genai
 import requests
 

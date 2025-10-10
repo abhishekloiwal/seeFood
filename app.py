@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import uuid
+import shutil
 from pathlib import Path
 from typing import List, Dict, Any
 
@@ -15,6 +16,7 @@ from menu_vision_pipeline import (
     DEFAULT_IMAGE_PROVIDER,
     DEFAULT_FAL_MODEL,
     DEFAULT_FAL_IMAGE_SIZE,
+    MenuExtractionError,
 )
 
 BASE_DIR = Path(__file__).parent.resolve()
@@ -53,15 +55,7 @@ def make_static_url(path: Path) -> str:
 
 def cleanup_session_directories(*directories: Path) -> None:
     for directory in directories:
-        if not directory.exists():
-            continue
-        for file_path in directory.glob("**/*"):
-            if file_path.is_file():
-                file_path.unlink(missing_ok=True)
-        for nested_dir in sorted(directory.glob("**"), reverse=True):
-            if nested_dir.is_dir():
-                nested_dir.rmdir()
-        directory.rmdir()
+        shutil.rmtree(directory, ignore_errors=True)
 
 
 def process_uploaded_files(files):
@@ -130,6 +124,12 @@ def process_uploaded_files(files):
                     }
                 )
 
+    except MenuExtractionError as exc:
+        cleanup_session_directories(upload_dir, output_base_dir)
+        return {
+            "error": "Gemini could not extract structured items from the menu. "
+            "Try retaking the photo with better lighting or upload a different page."
+        }
     except Exception as exc:  # pylint: disable=broad-except
         cleanup_session_directories(upload_dir, output_base_dir)
         return {"error": str(exc)}
