@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+.env
+menu_output_test/
+static/uploads/
+static/generated/
+
+# Node/React
+frontend/node_modules/
+frontend/dist/
+
+# Misc
+.DS_Store
+!static/.gitkeep

@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SeeFood Menu Digitizer</title>
+    <style>
+        :root {
+            color-scheme: light dark;
+        }
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background: #f5f5f5;
+            color: #222;
+        }
+        header {
+            background: #0f172a;
+            color: #fff;
+            padding: 1.5rem 1rem;
+            text-align: center;
+        }
+        main {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 2rem 1rem 4rem;
+        }
+        form {
+            background: #fff;
+            padding: 1.5rem;
+            border-radius: 12px;
+            box-shadow: 0 6px 16px rgba(15, 23, 42, 0.1);
+            margin-bottom: 2rem;
+        }
+        label {
+            font-weight: bold;
+            display: block;
+            margin-bottom: 0.75rem;
+        }
+        input[type="file"] {
+            width: 100%;
+            padding: 0.5rem;
+            border: 1px solid #cbd5f5;
+            border-radius: 8px;
+        }
+        button {
+            margin-top: 1rem;
+            background: #2563eb;
+            color: #fff;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            font-size: 1rem;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #1d4ed8;
+        }
+        .message {
+            margin-bottom: 1.5rem;
+            padding: 1rem;
+            border-radius: 8px;
+        }
+        .message.error {
+            background: #fee2e2;
+            color: #b91c1c;
+            border: 1px solid #fca5a5;
+        }
+        .uploads-grid, .card-grid {
+            display: grid;
+            gap: 1.5rem;
+        }
+        .uploads-grid {
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            margin-bottom: 2rem;
+        }
+        .uploads-grid img {
+            width: 100%;
+            height: auto;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(15, 23, 42, 0.15);
+        }
+        .card-grid {
+            grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+        }
+        .card {
+            background: #fff;
+            border-radius: 12px;
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
+        }
+        .card img {
+            width: 100%;
+            height: 180px;
+            object-fit: cover;
+            border-radius: 8px;
+        }
+        .card h3 {
+            margin: 0;
+            font-size: 1.12rem;
+        }
+        .card .price {
+            font-weight: bold;
+            color: #2563eb;
+        }
+        .card .page {
+            font-size: 0.85rem;
+            color: #475569;
+        }
+        footer {
+            text-align: center;
+            padding: 1.5rem;
+            background: #0f172a;
+            color: #fff;
+        }
+    </style>
+</head>
+<body>
+<header>
+    <h1>SeeFood Menu Digitizer</h1>
+    <p>Upload up to 10 menu images and turn them into polished item cards.</p>
+</header>
+<main>
+    {% if error_message %}
+        <div class="message error">{{ error_message }}</div>
+    {% endif %}
+    <form method="post" enctype="multipart/form-data">
+        <label for="menu_images">Menu images (PNG/JPG, up to 10 files):</label>
+        <input id="menu_images" name="menu_images" type="file" accept="image/*" multiple required>
+        <button type="submit">Process Menu</button>
+    </form>
+
+    {% if uploaded_pages %}
+        <section>
+            <h2>Uploaded Pages</h2>
+            <div class="uploads-grid">
+                {% for page in uploaded_pages %}
+                    <figure>
+                        <img src="{{ page.url }}" alt="Menu page {{ page.page }}">
+                        <figcaption>Page {{ page.page }} — {{ page.name }}</figcaption>
+                    </figure>
+                {% endfor %}
+            </div>
+        </section>
+    {% endif %}
+
+    {% if menu_items %}
+        <section>
+            <h2>Generated Menu Items</h2>
+            <div class="card-grid">
+                {% for item in menu_items %}
+                    <article class="card">
+                        <img src="{{ item.image_url }}" alt="{{ item.name }}">
+                        <h3>{{ item.name }}</h3>
+                        <div class="price">{{ item.price }}</div>
+                        <p>{{ item.description }}</p>
+                        <div class="page">Source: Page {{ item.page }}</div>
+                    </article>
+                {% endfor %}
+            </div>
+        </section>
+    {% endif %}
+</main>
+<footer>
+    Built with Gemini + fal.ai
+</footer>
+</body>
+</html>
