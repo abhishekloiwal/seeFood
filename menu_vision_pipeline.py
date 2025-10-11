@@ -48,6 +48,29 @@ IMAGE_STYLE_GUIDANCE = (
     "served on restaurant-quality plating."
 )
 
+_FINISH_REASON_LABELS = {
+    0: "STOP",
+    1: "MAX_TOKENS",
+    2: "SAFETY",
+    3: "RECITATION",
+    4: "OTHER",
+    5: "BLOCKLIST",
+    6: "PROHIBITED_CONTENT",
+    7: "SPII",
+}
+
+
+def _normalize_finish_reason(value: Any) -> str:
+    if value is None:
+        return "UNKNOWN"
+    if isinstance(value, str):
+        return value.upper()
+    try:
+        numeric = int(value)
+    except (TypeError, ValueError):
+        return str(value)
+    return _FINISH_REASON_LABELS.get(numeric, str(numeric))
+
 DEFAULT_TEXT_MODEL = "gemini-2.5-flash"
 FLASH_LITE_MODEL = "gemini-2.5-flash-lite"
 
@@ -113,19 +136,30 @@ def extract_menu_items(menu_file, model_name: str = DEFAULT_TEXT_MODEL) -> List[
             max_output_tokens=2048,
         ),
     )
-    raw_text = ''
-    if getattr(response, 'text', None):
-        raw_text = response.text
-    else:
-        for candidate in getattr(response, 'candidates', []) or []:
-            content = getattr(candidate, 'content', None)
-            parts = getattr(content, 'parts', None) if content else None
-            if parts:
-                for part in parts:
-                    chunk = getattr(part, 'text', None)
-                    if chunk:
-                        raw_text += chunk
+
+    text_chunks: List[str] = []
+    finish_reasons: List[str] = []
+
+    for candidate in getattr(response, 'candidates', []) or []:
+        finish_reasons.append(_normalize_finish_reason(getattr(candidate, 'finish_reason', None)))
+        content = getattr(candidate, 'content', None)
+        parts = getattr(content, 'parts', None) if content else None
+        if not parts:
+            continue
+        for part in parts:
+            chunk = getattr(part, 'text', None)
+            if chunk:
+                text_chunks.append(chunk)
+
+    raw_text = ''.join(text_chunks).strip()
     if not raw_text:
+        if finish_reasons:
+            summary = ', '.join(sorted(set(finish_reasons)))
+            raise MenuExtractionError(
+                "Gemini halted the menu extraction (finish_reason="
+                f"{summary}). Try retaking the photo with clearer lighting or "
+                "capture each page head-on."
+            )
         raise MenuExtractionError("Gemini did not return any JSON text.")
     try:
         payload = json.loads(raw_text)
