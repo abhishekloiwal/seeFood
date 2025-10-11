@@ -24,6 +24,8 @@ import os
 import re
 import sys
 import base64
+import mimetypes
+from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlparse
 from typing import Any, Dict, List
@@ -31,7 +33,16 @@ from typing import Any, Dict, List
 os.environ.setdefault("GOOGLE_CLOUD_DISABLE_GRPC_ALTS", "true")
 
 import google.generativeai as genai
+from google.generativeai.types import HarmBlockThreshold, HarmCategory
 import requests
+try:
+    from PIL import Image, ImageOps, UnidentifiedImageError
+except ImportError:  # pragma: no cover
+    Image = None  # type: ignore
+    ImageOps = None  # type: ignore
+
+    class UnidentifiedImageError(Exception):
+        """Fallback Pillow error placeholder."""
 
 
 MENU_EXTRACTION_PROMPT = (
@@ -79,6 +90,7 @@ FAL_IMAGE_PROVIDER = "fal_flux_krea"
 DEFAULT_IMAGE_PROVIDER = FAL_IMAGE_PROVIDER
 DEFAULT_FAL_MODEL = "fal-ai/flux/krea"
 DEFAULT_FAL_IMAGE_SIZE = "square_hd"
+MAX_IMAGE_DIMENSION = 3072
 
 
 def load_env_file(env_path: Path = Path('.env')) -> None:
@@ -119,22 +131,54 @@ def configure_client(api_key: str) -> None:
     genai.configure(api_key=api_key)
 
 
-def upload_menu_image(path: Path):
+def prepare_menu_payload(path: Path) -> Dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"Menu image not found: {path}")
-    return genai.upload_file(path=path)
+
+    mime_guess, _ = mimetypes.guess_type(path.name)
+
+    if Image is None:
+        data = path.read_bytes()
+        return {"mime_type": mime_guess or "image/jpeg", "data": data}
+
+    try:
+        with Image.open(path) as img:
+            img = ImageOps.exif_transpose(img)
+            if max(img.size) > MAX_IMAGE_DIMENSION:
+                ratio = MAX_IMAGE_DIMENSION / max(img.size)
+                new_size = (
+                    max(1, int(img.width * ratio)),
+                    max(1, int(img.height * ratio)),
+                )
+                img = img.resize(new_size, Image.LANCZOS)
+            img = img.convert("RGB")
+            buffer = BytesIO()
+            img.save(buffer, format="JPEG", quality=92)
+            data = buffer.getvalue()
+        return {"mime_type": "image/jpeg", "data": data}
+    except UnidentifiedImageError:
+        data = path.read_bytes()
+        return {"mime_type": mime_guess or "application/octet-stream", "data": data}
 
 
-def extract_menu_items(menu_file, model_name: str = DEFAULT_TEXT_MODEL) -> List[Dict[str, str]]:
+def extract_menu_items(menu_content: Dict[str, Any], model_name: str = DEFAULT_TEXT_MODEL) -> List[Dict[str, str]]:
     model = genai.GenerativeModel(model_name=model_name)
     response = model.generate_content(
-        [menu_file, MENU_EXTRACTION_PROMPT],
+        [menu_content, MENU_EXTRACTION_PROMPT],
         generation_config=genai.GenerationConfig(
             response_mime_type="application/json",
             temperature=0.2,
             top_p=0.95,
             max_output_tokens=2048,
         ),
+        safety_settings={
+            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+            HarmCategory.HARM_CATEGORY_VIOLENCE: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+            HarmCategory.HARM_CATEGORY_SEXUAL: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+            HarmCategory.HARM_CATEGORY_SELF_HARM: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        },
     )
 
     text_chunks: List[str] = []
@@ -156,9 +200,9 @@ def extract_menu_items(menu_file, model_name: str = DEFAULT_TEXT_MODEL) -> List[
         if finish_reasons:
             summary = ', '.join(sorted(set(finish_reasons)))
             raise MenuExtractionError(
-                "Gemini halted the menu extraction (finish_reason="
-                f"{summary}). Try retaking the photo with clearer lighting or "
-                "capture each page head-on."
+                "Gemini flagged this photo (finish_reason="
+                f"{summary}). Please capture the menu straight-on with better lighting "
+                "and avoid obstructions."
             )
         raise MenuExtractionError("Gemini did not return any JSON text.")
     try:
@@ -344,14 +388,8 @@ def process_menu(
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    menu_file = upload_menu_image(menu_path)
-    try:
-        items = extract_menu_items(menu_file, model_name=text_model)
-    finally:
-        try:
-            genai.delete_file(menu_file)
-        except Exception:
-            pass
+    menu_payload = prepare_menu_payload(menu_path)
+    items = extract_menu_items(menu_payload, model_name=text_model)
 
     metadata: Dict[str, Any] = {"menu_source": str(menu_path), "items": []}
 
