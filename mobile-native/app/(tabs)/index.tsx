@@ -1,4 +1,5 @@
 import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system';
 import { Image } from 'expo-image';
 import { useState } from 'react';
 import {
@@ -57,6 +58,141 @@ const resolveAssetUrl = (pathOrUrl?: string) => {
   }
 };
 
+const currencySymbolMap: Record<string, string> = {
+  EUR: '€',
+  USD: '$',
+  GBP: '£',
+  CHF: 'CHF',
+  CAD: 'CAD',
+  AUD: 'AUD',
+  INR: '₹',
+  JPY: '¥',
+};
+
+const normalizeAmount = (amount: string | undefined) => {
+  if (!amount) return null;
+  let sanitized = amount.replace(/[^\d.,]/g, '');
+  if (!sanitized) return null;
+  const commaIndex = sanitized.indexOf(',');
+  const dotIndex = sanitized.indexOf('.');
+  if (commaIndex !== -1 && dotIndex !== -1) {
+    if (dotIndex < commaIndex) {
+      sanitized = sanitized.replace(/\./g, '').replace(',', '.');
+    } else {
+      sanitized = sanitized.replace(/,/g, '');
+    }
+  } else if (commaIndex !== -1) {
+    sanitized = sanitized.replace(',', '.');
+  }
+  const parsed = Number.parseFloat(sanitized);
+  if (!Number.isFinite(parsed)) return null;
+  const hasFraction = !Number.isInteger(parsed);
+  return parsed.toFixed(hasFraction ? 2 : 0);
+};
+
+const renderCurrency = (unit: string, amount: string) =>
+  unit.length === 1 ? `${unit}${amount}` : `${unit} ${amount}`;
+
+const PRICE_REGEX =
+  /(?:(?<symbol>[€$£¥₹])\s*(?<amount>\d[\d.,]*))|(?:(?<amount2>\d[\d.,]*)\s*(?<symbol2>[€$£¥₹]))|(?:(?<code>(?:EUR|USD|GBP|CHF|CAD|AUD|INR|JPY))\s*(?<amount3>\d[\d.,]*))|(?:(?<amount4>\d[\d.,]*)\s*(?<code2>(?:EUR|USD|GBP|CHF|CAD|AUD|INR|JPY)))/gi;
+
+const formatPrice = (raw?: string) => {
+  if (!raw) return '€ --';
+  const trimmed = raw.trim();
+  if (!trimmed) return '—';
+  if (trimmed.toUpperCase() === 'N/A') return 'N/A';
+
+  let match: RegExpExecArray | null;
+  type PriceCandidate = { unit: string; amount: string; priority: number };
+  let best: PriceCandidate | null = null;
+
+  const consider = (unit: string, amount: string, priority: number) => {
+    if (!best || priority > best.priority) {
+      best = { unit, amount, priority };
+    }
+  };
+
+  while ((match = PRICE_REGEX.exec(trimmed))) {
+    const groups = match.groups ?? {};
+    const amount =
+      groups.amount ?? groups.amount2 ?? groups.amount3 ?? groups.amount4 ?? '';
+    const normalized = normalizeAmount(amount);
+    if (!normalized) continue;
+
+    const symbol = groups.symbol ?? groups.symbol2;
+    if (symbol) {
+      const priority = symbol === currencySymbolMap.EUR ? 2 : 3;
+      consider(symbol, normalized, priority);
+      continue;
+    }
+
+    const code = groups.code ?? groups.code2;
+    if (code) {
+      const unit = currencySymbolMap[code] ?? code;
+      const priority = code === 'EUR' ? 2 : 4;
+      consider(unit, normalized, priority);
+    }
+  }
+
+  if (best) {
+    return renderCurrency(best.unit, best.amount);
+  }
+
+  const fallback = trimmed.match(/\d[\d.,]*/);
+  if (fallback) {
+    const normalized = normalizeAmount(fallback[0]);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return trimmed;
+};
+
+const ensureFileSize = async (asset: ImagePicker.ImagePickerAsset): Promise<SelectedAsset> => {
+  if (typeof asset.fileSize === 'number' && asset.fileSize > 0) {
+    return { ...asset };
+  }
+
+  try {
+    const info = await FileSystem.getInfoAsync(asset.uri);
+    if (info.exists && typeof info.size === 'number') {
+      return { ...asset, fileSize: info.size };
+    }
+  } catch {
+    // best-effort; ignore failures and fall back to provided metadata
+  }
+
+  return { ...asset };
+};
+
+const evaluateAssets = (assets: SelectedAsset[]) => {
+  const accepted: SelectedAsset[] = [];
+  let rejection = '';
+
+  assets.forEach((asset, index) => {
+    if (accepted.length >= MAX_FILES) {
+      if (!rejection) {
+        rejection = `Only the first ${MAX_FILES} files are kept.`;
+      }
+      return;
+    }
+
+    const sizeMb = toMb(asset.fileSize);
+    if (sizeMb > MAX_FILE_MB) {
+      if (!rejection) {
+        const label = asset.fileName ?? `File ${index + 1}`;
+        rejection = `${label} exceeds the ${MAX_FILE_MB} MB limit.`;
+      }
+      return;
+    }
+
+    accepted.push(asset);
+  });
+
+  return { accepted, rejection };
+};
+
 export default function HomeScreen() {
   const [selectedAssets, setSelectedAssets] = useState<SelectedAsset[]>([]);
   const [pages, setPages] = useState<ProcessedPage[]>([]);
@@ -64,6 +200,19 @@ export default function HomeScreen() {
   const [sessionId, setSessionId] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+
+  const applyAssets = async (
+    incoming: ImagePicker.ImagePickerAsset[],
+    mode: 'replace' | 'append' = 'replace',
+  ) => {
+    const combined =
+      mode === 'replace' ? incoming : [...selectedAssets, ...incoming];
+    const normalized = await Promise.all(combined.map(ensureFileSize));
+    const { accepted, rejection } = evaluateAssets(normalized);
+
+    setSelectedAssets(accepted);
+    setErrorMessage(rejection);
+  };
 
   const handlePickImages = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -79,35 +228,31 @@ export default function HomeScreen() {
       quality: 1,
     });
 
-    if (result.canceled) return;
+    if (result.canceled) {
+      return;
+    }
 
-    const accepted: SelectedAsset[] = [];
-    const rejected: SelectedAsset[] = [];
+    await applyAssets(result.assets ?? [], 'replace');
+  };
 
-    result.assets.forEach((asset) => {
-      if (accepted.length >= MAX_FILES) {
-        rejected.push({ ...asset, rejectedReason: 'Only the first 10 files are kept.' });
-        return;
-      }
+  const handleCaptureImage = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== ImagePicker.PermissionStatus.GRANTED) {
+      Alert.alert('Permission required', 'Enable camera access to capture menu pages.');
+      return;
+    }
 
-      const sizeMb = toMb(asset.fileSize);
-      if (sizeMb > MAX_FILE_MB) {
-        rejected.push({
-          ...asset,
-          rejectedReason: `${asset.fileName ?? 'Unnamed file'} exceeds ${MAX_FILE_MB} MB.`,
-        });
-        return;
-      }
-
-      accepted.push(asset);
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 1,
+      cameraType: ImagePicker.CameraType.back,
     });
 
-    setSelectedAssets(accepted);
-    if (rejected.length) {
-      setErrorMessage(rejected[0]?.rejectedReason ?? 'Some files were skipped.');
-    } else {
-      setErrorMessage('');
+    if (result.canceled) {
+      return;
     }
+
+    await applyAssets(result.assets ?? [], 'append');
   };
 
   const handleReset = () => {
@@ -172,6 +317,7 @@ export default function HomeScreen() {
       const resolvedItems = (payload.items ?? []).map((item) => ({
         ...item,
         image_url: resolveAssetUrl(item.image_url),
+        price: formatPrice(item.price),
       }));
 
       setSessionId(payload.sessionId ?? '');
@@ -207,13 +353,28 @@ export default function HomeScreen() {
           </Pressable>
         </View>
         <Text style={styles.cardHint}>
-          Select JPG, PNG, WebP, or HEIC. Max {MAX_FILES} files · {MAX_FILE_MB} MB each.
+          Select or capture JPG, PNG, WebP, or HEIC. Max {MAX_FILES} files · {MAX_FILE_MB} MB each.
         </Text>
 
-        <Pressable style={styles.dropzone} onPress={handlePickImages} disabled={isLoading}>
-          <Text style={styles.dropzoneIcon}>📷</Text>
-          <Text style={styles.dropzoneText}>Tap to browse or capture menu pages</Text>
-        </Pressable>
+        <View style={styles.selectorCard}>
+          <Text style={styles.selectorIcon}>📄</Text>
+          <Text style={styles.selectorText}>Add menu images</Text>
+          <Text style={styles.selectorHint}>Choose from your library or capture new pages.</Text>
+          <View style={styles.actionRow}>
+            <Pressable
+              style={[styles.actionButton, isLoading && styles.actionButtonDisabled]}
+              onPress={handlePickImages}
+              disabled={isLoading}>
+              <Text style={styles.actionLabel}>Browse library</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.actionButtonSecondary, isLoading && styles.actionButtonDisabled]}
+              onPress={handleCaptureImage}
+              disabled={isLoading}>
+              <Text style={styles.actionLabelSecondary}>Capture photo</Text>
+            </Pressable>
+          </View>
+        </View>
 
         {selectedAssets.length > 0 ? (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.previewStrip}>
@@ -363,24 +524,60 @@ const styles = StyleSheet.create({
   resetButtonDisabled: {
     opacity: 0.5,
   },
-  dropzone: {
-    backgroundColor: 'rgba(226, 232, 240, 0.45)',
+  selectorCard: {
+    backgroundColor: 'rgba(248, 250, 255, 0.92)',
     borderRadius: 20,
     borderWidth: 2,
-    borderColor: 'rgba(37, 99, 235, 0.35)',
-    paddingVertical: 32,
-    justifyContent: 'center',
+    borderColor: 'rgba(37, 99, 235, 0.25)',
+    paddingVertical: 24,
+    paddingHorizontal: 18,
     alignItems: 'center',
-    gap: 8,
+    gap: 12,
   },
-  dropzoneIcon: {
+  selectorIcon: {
     fontSize: 32,
   },
-  dropzoneText: {
+  selectorText: {
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '700',
     color: '#1f2937',
+  },
+  selectorHint: {
+    fontSize: 13,
+    color: '#64748b',
     textAlign: 'center',
+  },
+  actionRow: {
+    flexDirection: 'row',
+    gap: 12,
+    width: '100%',
+  },
+  actionButton: {
+    flex: 1,
+    backgroundColor: '#2563eb',
+    borderRadius: 14,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  actionButtonSecondary: {
+    flex: 1,
+    borderRadius: 14,
+    paddingVertical: 12,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(37, 99, 235, 0.4)',
+    backgroundColor: '#e0f2fe',
+  },
+  actionButtonDisabled: {
+    opacity: 0.6,
+  },
+  actionLabel: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  actionLabelSecondary: {
+    color: '#1d4ed8',
+    fontWeight: '600',
   },
   previewStrip: {
     flexGrow: 0,

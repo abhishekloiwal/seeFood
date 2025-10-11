@@ -29,7 +29,7 @@ The Metro dashboard will provide a QR code. Scan it with Expo Go, or press the o
 
 ## Development Notes
 
-- Menu uploads use `expo-image-picker` with multiple selection and size limits (≤10 files, ≤12 MB each).
+- Menu uploads use `expo-image-picker` with multiple selection, live camera capture, and size limits (≤10 files, ≤12 MB each).
 - Results are fetched from `${EXPO_PUBLIC_API_BASE_URL}/api/process` and rendered immediately.
 - Styling follows the existing SeeFood visual language to keep parity with the web clients.
 
