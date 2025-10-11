@@ -4,6 +4,7 @@ __pycache__/
 venv/
 .env
 menu_output_test/
+test_output/
 static/uploads/
 static/generated/
 

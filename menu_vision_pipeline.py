@@ -28,13 +28,13 @@ import mimetypes
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlparse
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 os.environ.setdefault("GOOGLE_CLOUD_DISABLE_GRPC_ALTS", "true")
 
 import google.generativeai as genai
-from google.generativeai.types import HarmBlockThreshold, HarmCategory
 import requests
+from openai import OpenAI
 try:
     from PIL import Image, ImageOps, UnidentifiedImageError
 except ImportError:  # pragma: no cover
@@ -46,41 +46,16 @@ except ImportError:  # pragma: no cover
 
 
 MENU_EXTRACTION_PROMPT = (
-    "You are a Michelin-star menu curator. You will receive an image of a menu. "
-    "Extract every distinct menu listing including its name, price or cost (include the currency symbol "
-    "or numeric value exactly as shown), and a concise one-sentence description no longer than 30 words. "
-    "If the menu already supplies a description, summarize it to a single sentence."
-    "Return strict JSON matching this schema: "
-    '{"items": [{"name": "string", "price": "string", "description": "string"}]}.'
+    "You are a Michelin-star menu curator. Given a menu photo, list every distinct dish, drink, or offering. "
+    "For each item provide the name, the price text exactly as printed (keep currency symbols or use `N/A` if absent), "
+    "and a concise one-sentence description summarizing key details. Output strict JSON matching "
+    "{\"items\": [{\"name\": \"string\", \"price\": \"string\", \"description\": \"string\"}]} without extra commentary."
 )
 
 IMAGE_STYLE_GUIDANCE = (
     "Highly appetizing studio photography, natural lighting, shallow depth of field, "
     "served on restaurant-quality plating."
 )
-
-_FINISH_REASON_LABELS = {
-    0: "STOP",
-    1: "MAX_TOKENS",
-    2: "SAFETY",
-    3: "RECITATION",
-    4: "OTHER",
-    5: "BLOCKLIST",
-    6: "PROHIBITED_CONTENT",
-    7: "SPII",
-}
-
-
-def _normalize_finish_reason(value: Any) -> str:
-    if value is None:
-        return "UNKNOWN"
-    if isinstance(value, str):
-        return value.upper()
-    try:
-        numeric = int(value)
-    except (TypeError, ValueError):
-        return str(value)
-    return _FINISH_REASON_LABELS.get(numeric, str(numeric))
 
 DEFAULT_TEXT_MODEL = "gemini-2.5-flash"
 FLASH_LITE_MODEL = "gemini-2.5-flash-lite"
@@ -91,6 +66,21 @@ DEFAULT_IMAGE_PROVIDER = FAL_IMAGE_PROVIDER
 DEFAULT_FAL_MODEL = "fal-ai/flux/krea"
 DEFAULT_FAL_IMAGE_SIZE = "square_hd"
 MAX_IMAGE_DIMENSION = 3072
+OPENAI_MODEL = "gpt-5-mini"
+
+_openai_client: OpenAI | None = None
+
+
+def get_openai_client() -> OpenAI:
+    global _openai_client
+    if _openai_client is None:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "OpenAI API key missing. Set OPENAI_API_KEY env var or pass via configuration."
+            )
+        _openai_client = OpenAI(api_key=api_key)
+    return _openai_client
 
 
 def load_env_file(env_path: Path = Path('.env')) -> None:
@@ -152,6 +142,10 @@ def prepare_menu_payload(path: Path) -> Dict[str, Any]:
                 )
                 img = img.resize(new_size, Image.LANCZOS)
             img = img.convert("RGB")
+            try:
+                img = ImageOps.autocontrast(img, cutoff=1)
+            except Exception:
+                pass
             buffer = BytesIO()
             img.save(buffer, format="JPEG", quality=92)
             data = buffer.getvalue()
@@ -161,58 +155,60 @@ def prepare_menu_payload(path: Path) -> Dict[str, Any]:
         return {"mime_type": mime_guess or "application/octet-stream", "data": data}
 
 
-def extract_menu_items(menu_content: Dict[str, Any], model_name: str = DEFAULT_TEXT_MODEL) -> List[Dict[str, str]]:
-    model = genai.GenerativeModel(model_name=model_name)
-    response = model.generate_content(
-        [menu_content, MENU_EXTRACTION_PROMPT],
-        generation_config=genai.GenerationConfig(
-            response_mime_type="application/json",
-            temperature=0.2,
-            top_p=0.95,
-            max_output_tokens=2048,
-        ),
-        safety_settings={
-            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-            HarmCategory.HARM_CATEGORY_VIOLENCE: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-            HarmCategory.HARM_CATEGORY_SEXUAL: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-            HarmCategory.HARM_CATEGORY_SELF_HARM: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-        },
+def extract_menu_items(menu_content: Dict[str, Any], model_name: str = DEFAULT_TEXT_MODEL) -> List[Dict[str, str]]:  # noqa: ARG001
+    client = get_openai_client()
+
+    image_b64 = base64.b64encode(menu_content["data"]).decode("ascii")
+    data_url = f"data:{menu_content['mime_type']};base64,{image_b64}"
+
+    response = client.responses.create(
+        model=OPENAI_MODEL,
+        input=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": MENU_EXTRACTION_PROMPT},
+                    {"type": "input_image", "image_url": data_url},
+                ],
+            }
+        ],
+        max_output_tokens=4096,
+        reasoning={"effort": "low"},
     )
 
-    text_chunks: List[str] = []
-    finish_reasons: List[str] = []
+    if getattr(response, "status", "completed") != "completed":
+        raise MenuExtractionError(
+            f"OpenAI response incomplete (status={response.status}). Try retaking the photo."
+        )
 
-    for candidate in getattr(response, 'candidates', []) or []:
-        finish_reasons.append(_normalize_finish_reason(getattr(candidate, 'finish_reason', None)))
-        content = getattr(candidate, 'content', None)
-        parts = getattr(content, 'parts', None) if content else None
-        if not parts:
-            continue
-        for part in parts:
-            chunk = getattr(part, 'text', None)
-            if chunk:
-                text_chunks.append(chunk)
-
-    raw_text = ''.join(text_chunks).strip()
+    raw_text: Optional[str] = getattr(response, "output_text", None)
     if not raw_text:
-        if finish_reasons:
-            summary = ', '.join(sorted(set(finish_reasons)))
-            raise MenuExtractionError(
-                "Gemini flagged this photo (finish_reason="
-                f"{summary}). Please capture the menu straight-on with better lighting "
-                "and avoid obstructions."
-            )
-        raise MenuExtractionError("Gemini did not return any JSON text.")
+        raise MenuExtractionError("OpenAI did not return any text for the menu image.")
+
+    raw_text = raw_text.strip()
+    if raw_text.startswith("```"):
+        raw_text = raw_text.strip("`")
+        if raw_text.lower().startswith("json"):
+            raw_text = raw_text.split("\n", 1)[-1]
+
     try:
         payload = json.loads(raw_text)
-    except json.JSONDecodeError as exc:
-        raise MenuExtractionError(f"Failed to decode Gemini JSON: {exc}\nRaw: {raw_text}") from exc
+    except json.JSONDecodeError:
+        snippet = raw_text
+        start = raw_text.find("{")
+        end = raw_text.rfind("}")
+        if start != -1 and end != -1:
+            snippet = raw_text[start : end + 1]
+        try:
+            payload = json.loads(snippet)
+        except json.JSONDecodeError as exc:
+            raise MenuExtractionError(
+                f"Failed to decode OpenAI JSON: {exc}\nRaw response: {raw_text}"
+            ) from exc
 
     items = payload.get("items")
     if not isinstance(items, list) or not items:
-        raise MenuExtractionError("No menu items detected in Gemini response.")
+        raise MenuExtractionError("No menu items detected in OpenAI response.")
 
     cleaned_items: List[Dict[str, str]] = []
     for idx, item in enumerate(items):
