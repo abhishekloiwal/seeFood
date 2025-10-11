@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:5000'
@@ -23,6 +23,10 @@ const resolveStatic = (pathOrUrl) => {
 
 function App() {
   const inputRef = useRef(null)
+  const videoRef = useRef(null)
+  const canvasRef = useRef(null)
+  const streamRef = useRef(null)
+  const cameraRequestRef = useRef(0)
   const [files, setFiles] = useState([])
   const [previews, setPreviews] = useState([])
   const [pages, setPages] = useState([])
@@ -30,17 +34,34 @@ function App() {
   const [sessionId, setSessionId] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [isCameraOpen, setIsCameraOpen] = useState(false)
+  const [isCameraReady, setIsCameraReady] = useState(false)
 
   const totalSize = useMemo(
     () => files.reduce((acc, file) => acc + file.size, 0),
     [files],
   )
 
-  const handleFileSelection = (incoming) => {
+  const handleFileSelection = (incoming, options = {}) => {
+    const { append = false } = options
     const selected = Array.from(incoming ?? [])
-    const filtered = selected
-      .filter((file) => file.size / (1024 * 1024) <= MAX_FILE_MB)
-      .slice(0, MAX_FILES)
+    const existing = append ? files : []
+    const combined = [...existing, ...selected]
+
+    const filtered = []
+    let droppedCount = 0
+
+    for (const file of combined) {
+      if (filtered.length >= MAX_FILES) {
+        droppedCount += 1
+        continue
+      }
+      if (file.size / (1024 * 1024) <= MAX_FILE_MB) {
+        filtered.push(file)
+      } else {
+        droppedCount += 1
+      }
+    }
 
     const nextPreviews = filtered.map((file) => ({
       url: URL.createObjectURL(file),
@@ -52,7 +73,7 @@ function App() {
     setFiles(filtered)
     setPreviews(nextPreviews)
     setError(
-      selected.length > filtered.length
+      droppedCount
         ? `We kept the first ${MAX_FILES} files under ${MAX_FILE_MB} MB.`
         : '',
     )
@@ -71,7 +92,110 @@ function App() {
     event.preventDefault()
   }
 
+  const stopStream = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop())
+      streamRef.current = null
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null
+    }
+  }
+
+  const closeCamera = () => {
+    cameraRequestRef.current += 1
+    setIsCameraOpen(false)
+    setIsCameraReady(false)
+    stopStream()
+  }
+
+  const openCamera = async () => {
+    if (loading || isCameraOpen) return
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError('Camera access is not supported in this browser.')
+      return
+    }
+
+    const requestId = cameraRequestRef.current + 1
+    cameraRequestRef.current = requestId
+
+    try {
+      setError('')
+      setIsCameraReady(false)
+      setIsCameraOpen(true)
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } },
+        audio: false,
+      })
+
+      if (requestId !== cameraRequestRef.current) {
+        stream.getTracks().forEach((track) => track.stop())
+        return
+      }
+
+      streamRef.current = stream
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream
+        await videoRef.current.play().catch(() => {})
+      }
+    } catch (cameraError) {
+      if (cameraRequestRef.current === requestId) {
+        closeCamera()
+        setError(
+          cameraError?.name === 'NotAllowedError'
+            ? 'Camera access was blocked. Enable permissions and try again.'
+            : 'We could not access the camera. Please try again.',
+        )
+      }
+    }
+  }
+
+  const handleCapture = () => {
+    const video = videoRef.current
+    const canvas = canvasRef.current
+
+    if (!video || !canvas || !isCameraReady) {
+      setError('Camera is still starting up. Try again in a moment.')
+      return
+    }
+
+    const width = video.videoWidth
+    const height = video.videoHeight
+
+    if (!width || !height) {
+      setError('Camera is still starting up. Try again in a moment.')
+      return
+    }
+
+    canvas.width = width
+    canvas.height = height
+
+    const context = canvas.getContext('2d')
+    context.drawImage(video, 0, 0, width, height)
+
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          setError('We could not capture a photo. Please try again.')
+          return
+        }
+
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+        const file = new File([blob], `captured-${timestamp}.jpg`, {
+          type: 'image/jpeg',
+        })
+
+        handleFileSelection([file], { append: true })
+        closeCamera()
+      },
+      'image/jpeg',
+      0.92,
+    )
+  }
+
   const handleReset = () => {
+    closeCamera()
     setFiles([])
     setPreviews([])
     setPages([])
@@ -126,6 +250,39 @@ function App() {
     }
   }
 
+  useEffect(() => {
+    if (!isCameraOpen || !streamRef.current || !videoRef.current) {
+      return
+    }
+
+    videoRef.current.srcObject = streamRef.current
+    videoRef.current.play().catch(() => {})
+  }, [isCameraOpen])
+
+  useEffect(() => {
+    if (!isCameraOpen) {
+      return () => {}
+    }
+
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        closeCamera()
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [isCameraOpen, closeCamera])
+
+  useEffect(
+    () => () => {
+      stopStream()
+    },
+    [],
+  )
+
   return (
     <div className="app">
       <header className="app-bar">
@@ -170,6 +327,12 @@ function App() {
               onChange={onInputChange}
               disabled={loading}
             />
+          </div>
+          <div className="camera-actions">
+            <span className="camera-actions__hint">Prefer to capture a menu now?</span>
+            <button type="button" className="camera-button" onClick={openCamera} disabled={loading}>
+              Open camera
+            </button>
           </div>
 
           {previews.length > 0 && (
@@ -236,6 +399,39 @@ function App() {
           </section>
         )}
       </main>
+
+      {isCameraOpen && (
+        <div className="camera-modal" role="dialog" aria-modal="true">
+          <div className="camera-modal__backdrop" onClick={closeCamera} />
+          <div className="camera-modal__dialog" role="document">
+            <video
+              ref={videoRef}
+              className="camera-modal__video"
+              playsInline
+              autoPlay
+              muted
+              onLoadedMetadata={() => setIsCameraReady(true)}
+            />
+            <canvas ref={canvasRef} className="camera-modal__canvas" aria-hidden="true" />
+            <div className="camera-modal__controls">
+              <button
+                type="button"
+                className="camera-modal__capture"
+                onClick={handleCapture}
+                disabled={!isCameraReady}
+              >
+                Take photo
+              </button>
+              <button type="button" className="camera-modal__close" onClick={closeCamera}>
+                Cancel
+              </button>
+            </div>
+            {!isCameraReady && (
+              <p className="camera-modal__status">Allow camera access to get started.</p>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

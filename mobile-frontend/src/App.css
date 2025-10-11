@@ -146,6 +146,34 @@ body {
   cursor: pointer;
 }
 
+.camera-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  text-align: center;
+  color: #475569;
+  font-size: 0.85rem;
+}
+
+.camera-actions__hint {
+  margin: 0;
+}
+
+.camera-button {
+  border: 1px solid rgba(37, 99, 235, 0.4);
+  background: rgba(59, 130, 246, 0.1);
+  color: #1d4ed8;
+  border-radius: 999px;
+  padding: 0.55rem 1.3rem;
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.camera-button:disabled {
+  opacity: 0.6;
+}
+
 .preview-strip {
   display: flex;
   gap: 0.8rem;
@@ -337,6 +365,86 @@ body {
   border-radius: 999px;
   background: #e0f2fe;
   color: #0369a1;
+}
+
+.camera-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 1.5rem;
+}
+
+.camera-modal__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.75);
+  backdrop-filter: blur(6px);
+}
+
+.camera-modal__dialog {
+  position: relative;
+  background: #0f172a;
+  border-radius: 24px;
+  padding: 1.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  width: min(520px, 100%);
+  box-shadow: 0 28px 64px -32px rgba(8, 14, 28, 0.85);
+  color: #e2e8f0;
+  z-index: 1;
+}
+
+.camera-modal__video {
+  width: 100%;
+  max-height: min(420px, 60vh);
+  border-radius: 18px;
+  background: #020617;
+  object-fit: cover;
+}
+
+.camera-modal__canvas {
+  display: none;
+}
+
+.camera-modal__controls {
+  display: flex;
+  justify-content: center;
+  gap: 0.8rem;
+}
+
+.camera-modal__capture {
+  border: none;
+  border-radius: 999px;
+  background: linear-gradient(120deg, #2563eb 0%, #3b82f6 100%);
+  color: #fff;
+  font-weight: 600;
+  padding: 0.7rem 1.5rem;
+  font-size: 1rem;
+}
+
+.camera-modal__capture:disabled {
+  opacity: 0.65;
+}
+
+.camera-modal__close {
+  border: 1px solid rgba(226, 232, 240, 0.3);
+  border-radius: 999px;
+  background: transparent;
+  color: #e2e8f0;
+  font-weight: 600;
+  padding: 0.7rem 1.5rem;
+  font-size: 1rem;
+}
+
+.camera-modal__status {
+  margin: 0;
+  font-size: 0.85rem;
+  color: rgba(226, 232, 240, 0.8);
+  text-align: center;
 }
 
 @media (min-width: 920px) {
