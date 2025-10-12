@@ -1,7 +1,4 @@
 {
-  "cli": {
-    "appVersionSource": "app.json"
-  },
   "build": {
     "development": {
       "distribution": "internal",
