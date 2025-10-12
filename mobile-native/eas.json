@@ -1,0 +1,20 @@
+{
+  "cli": {
+    "appVersionSource": "app.json"
+  },
+  "build": {
+    "development": {
+      "distribution": "internal",
+      "developmentClient": true,
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://web-production-b6dfc.up.railway.app"
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://web-production-b6dfc.up.railway.app"
+      }
+    }
+  }
+}
