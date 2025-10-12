@@ -1,7 +1,7 @@
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
 import { Image } from 'expo-image';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -200,6 +200,36 @@ export default function HomeScreen() {
   const [sessionId, setSessionId] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isPreviewExpanded, setIsPreviewExpanded] = useState(true);
+
+  const scrollRef = useRef<ScrollView | null>(null);
+  const resultsAnchorY = useRef(0);
+  const previousItemCount = useRef(0);
+
+  const hasAssets = selectedAssets.length > 0;
+  const hasItems = items.length > 0;
+
+  useEffect(() => {
+    if (!hasAssets) {
+      setIsPreviewExpanded(true);
+    }
+  }, [hasAssets]);
+
+  useEffect(() => {
+    if (hasItems && previousItemCount.current === 0) {
+      setIsPreviewExpanded(false);
+      const timeout = setTimeout(() => {
+        if (resultsAnchorY.current > 0) {
+          scrollRef.current?.scrollTo({
+            y: Math.max(resultsAnchorY.current - 80, 0),
+            animated: true,
+          });
+        }
+      }, 220);
+      return () => clearTimeout(timeout);
+    }
+    previousItemCount.current = items.length;
+  }, [hasItems, items.length]);
 
   const applyAssets = async (
     incoming: ImagePicker.ImagePickerAsset[],
@@ -212,6 +242,9 @@ export default function HomeScreen() {
 
     setSelectedAssets(accepted);
     setErrorMessage(rejection);
+    if (accepted.length > 0) {
+      setIsPreviewExpanded(true);
+    }
   };
 
   const handlePickImages = async () => {
@@ -332,129 +365,223 @@ export default function HomeScreen() {
   };
 
   const totalBytes = selectedAssets.reduce((sum, asset) => sum + (asset.fileSize ?? 0), 0);
+  const selectedPagesLabel = `${selectedAssets.length} ${selectedAssets.length === 1 ? 'page' : 'pages'}`;
+  const generatedPagesLabel = `${pages.length} ${pages.length === 1 ? 'page' : 'pages'}`;
+  const generatedItemsLabel = `${items.length} ${items.length === 1 ? 'item' : 'items'}`;
+  const firstAsset = selectedAssets[0];
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.container}>
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.title}>SeeFood Mobile</Text>
-          <Text style={styles.subtitle}>
-            Digitise restaurant menus on the go and keep your team aligned.
-          </Text>
+    <ScrollView
+      ref={scrollRef}
+      style={styles.screen}
+      contentContainerStyle={styles.content}
+      stickyHeaderIndices={[0]}
+    >
+      <View style={styles.stickyBar}>
+        <View style={styles.brandRow}>
+          <View>
+            <Text style={styles.brandTitle}>SeeFood</Text>
+            <Text style={styles.brandTagline}>AI menu digitizer</Text>
+          </View>
+          {sessionId ? <Text style={styles.sessionChip}>Session {sessionId}</Text> : null}
         </View>
-        {sessionId ? <Text style={styles.session}>Session {sessionId}</Text> : null}
-      </View>
-
-      <View style={styles.card}>
-        <View style={styles.cardHeader}>
-          <Text style={styles.cardTitle}>Menu photos</Text>
-          <Pressable onPress={handleReset} disabled={isLoading}>
-            <Text style={[styles.resetButton, isLoading && styles.resetButtonDisabled]}>Clear</Text>
+        <View style={styles.stickyActions}>
+          <Pressable
+            style={[
+              styles.stickyButton,
+              styles.stickyPrimaryButton,
+              isLoading && styles.disabledButton,
+            ]}
+            onPress={handlePickImages}
+            disabled={isLoading}
+          >
+            <Text style={styles.stickyPrimaryLabel}>Browse</Text>
+          </Pressable>
+          <Pressable
+            style={[
+              styles.stickyButton,
+              styles.stickyGhostButton,
+              isLoading && styles.disabledButton,
+            ]}
+            onPress={handleCaptureImage}
+            disabled={isLoading}
+          >
+            <Text style={styles.stickyGhostLabel}>Capture</Text>
           </Pressable>
         </View>
-        <Text style={styles.cardHint}>
-          Select or capture JPG, PNG, WebP, or HEIC. Max {MAX_FILES} files · {MAX_FILE_MB} MB each.
-        </Text>
-
-        <View style={styles.selectorCard}>
-          <Text style={styles.selectorIcon}>📄</Text>
-          <Text style={styles.selectorText}>Add menu images</Text>
-          <Text style={styles.selectorHint}>Choose from your library or capture new pages.</Text>
-          <View style={styles.actionRow}>
-            <Pressable
-              style={[styles.actionButton, isLoading && styles.actionButtonDisabled]}
-              onPress={handlePickImages}
-              disabled={isLoading}>
-              <Text style={styles.actionLabel}>Browse library</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.actionButtonSecondary, isLoading && styles.actionButtonDisabled]}
-              onPress={handleCaptureImage}
-              disabled={isLoading}>
-              <Text style={styles.actionLabelSecondary}>Capture photo</Text>
-            </Pressable>
-          </View>
-        </View>
-
-        {selectedAssets.length > 0 ? (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.previewStrip}>
-            {selectedAssets.map((asset) => (
-              <View style={styles.previewCard} key={asset.assetId ?? asset.uri}>
-                <Image source={{ uri: asset.uri }} style={styles.previewImage} contentFit="cover" />
-                <View style={styles.previewInfo}>
-                  <Text style={styles.previewName} numberOfLines={1}>
-                    {asset.fileName ?? 'Selected image'}
-                  </Text>
-                  <Text style={styles.previewSize}>{formatBytes(asset.fileSize)}</Text>
-                </View>
-              </View>
-            ))}
-          </ScrollView>
-        ) : null}
-
-        {errorMessage ? <Text style={styles.error}>{errorMessage}</Text> : null}
-
-        <Pressable
-          style={[styles.primaryButton, isLoading && styles.primaryButtonDisabled]}
-          onPress={handleUpload}
-          disabled={isLoading}>
-          {isLoading ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.primaryLabel}>Generate menu cards</Text>
-          )}
-        </Pressable>
-
-        <View style={styles.metaRow}>
-          <Text style={styles.metaText}>{selectedAssets.length} files selected</Text>
-          <Text style={styles.metaText}>{formatBytes(totalBytes)}</Text>
-        </View>
       </View>
 
-      {pages.length > 0 ? (
-        <View style={styles.card}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.cardTitle}>Captured pages</Text>
+      <View style={styles.body}>
+        {!hasAssets ? (
+          <View style={styles.panel}>
+            <Text style={styles.panelBadge}>Menu upload</Text>
+            <Text style={styles.panelTitle}>Drop in your first menu</Text>
+            <Text style={styles.panelSubtitle}>
+              Snap a fresh photo or pull one from your library. We&apos;ll handle the rest.
+            </Text>
+            <Pressable
+              style={[styles.primaryButton, isLoading && styles.disabledButton]}
+              onPress={handlePickImages}
+              disabled={isLoading}
+            >
+              <Text style={styles.primaryLabel}>Browse library</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.secondaryButton, isLoading && styles.disabledButton]}
+              onPress={handleCaptureImage}
+              disabled={isLoading}
+            >
+              <Text style={styles.secondaryLabel}>Capture photo</Text>
+            </Pressable>
+            {errorMessage ? <Text style={styles.error}>{errorMessage}</Text> : null}
           </View>
-          <View style={styles.pageGrid}>
-            {pages.map((page) => (
-              <View style={styles.pageCard} key={`${page.page}-${page.url}`}>
-                <Image source={{ uri: page.url }} style={styles.pageImage} contentFit="cover" />
-                <Text style={styles.pageCaption}>{`Page ${page.page}`}</Text>
-                <Text style={styles.pageName} numberOfLines={1}>
-                  {page.name}
+        ) : (
+          <View style={[styles.panel, styles.previewPanel]}>
+            <View style={styles.panelHeader}>
+              <View>
+                <Text style={styles.panelTitle}>Captured pages</Text>
+                <Text style={styles.panelMeta}>
+                  {selectedPagesLabel} · {formatBytes(totalBytes)}
                 </Text>
               </View>
-            ))}
-          </View>
-        </View>
-      ) : null}
-
-      {items.length > 0 ? (
-        <View style={styles.card}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.cardTitle}>Menu items</Text>
-            <Text style={styles.sectionMeta}>{items.length} items</Text>
-          </View>
-          <View style={styles.itemGrid}>
-            {items.map((item, index) => (
-              <View style={styles.itemCard} key={`${item.name}-${index}`}>
-                <Image source={{ uri: item.image_url }} style={styles.itemImage} contentFit="cover" />
-                <View style={styles.itemBody}>
-                  <View style={styles.itemHeading}>
-                    <Text style={styles.itemTitle}>{item.name}</Text>
-                    <Text style={styles.itemPrice}>{item.price}</Text>
-                  </View>
-                  <Text style={styles.itemDescription}>{item.description}</Text>
-                  <Text style={styles.badge}>Page {item.page}</Text>
-                </View>
+              <View style={styles.panelActions}>
+                <Pressable onPress={() => setIsPreviewExpanded((prev) => !prev)}>
+                  <Text style={styles.panelActionText}>
+                    {isPreviewExpanded ? 'Hide preview' : 'Show preview'}
+                  </Text>
+                </Pressable>
+                <Pressable onPress={handleReset} disabled={isLoading}>
+                  <Text style={[styles.panelActionText, styles.panelReset]}>Start over</Text>
+                </Pressable>
               </View>
-            ))}
-          </View>
-        </View>
-      ) : null}
+            </View>
 
-      <Text style={styles.footer}>Built with Railway · Flask · Expo</Text>
+            {isPreviewExpanded ? (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.previewStrip}
+                contentContainerStyle={styles.previewStripContent}
+              >
+                {selectedAssets.map((asset) => (
+                  <View style={styles.previewCard} key={asset.assetId ?? asset.uri}>
+                    <Image source={{ uri: asset.uri }} style={styles.previewImage} contentFit="cover" />
+                    <View style={styles.previewInfo}>
+                      <Text style={styles.previewName} numberOfLines={1}>
+                        {asset.fileName ?? 'Selected image'}
+                      </Text>
+                      <Text style={styles.previewSize}>{formatBytes(asset.fileSize)}</Text>
+                    </View>
+                  </View>
+                ))}
+              </ScrollView>
+            ) : (
+              <Pressable style={styles.previewSummary} onPress={() => setIsPreviewExpanded(true)}>
+                {firstAsset ? (
+                  <Image source={{ uri: firstAsset.uri }} style={styles.previewThumb} contentFit="cover" />
+                ) : null}
+                <View style={styles.previewSummaryBody}>
+                  <Text style={styles.previewSummaryText}>{selectedPagesLabel}</Text>
+                  <Text style={styles.previewSummaryHint}>Tap to expand previews</Text>
+                </View>
+              </Pressable>
+            )}
+
+            {errorMessage ? <Text style={styles.error}>{errorMessage}</Text> : null}
+
+            <Pressable
+              style={[styles.primaryButton, isLoading && styles.disabledButton]}
+              onPress={handleUpload}
+              disabled={isLoading}
+            >
+              {isLoading ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.primaryLabel}>Generate menu cards</Text>
+              )}
+            </Pressable>
+
+            <View style={styles.secondaryRow}>
+              <Pressable
+                style={[styles.secondaryButton, isLoading && styles.disabledButton]}
+                onPress={handlePickImages}
+                disabled={isLoading}
+              >
+                <Text style={styles.secondaryLabel}>Add from library</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.secondaryButton, isLoading && styles.disabledButton]}
+                onPress={handleCaptureImage}
+                disabled={isLoading}
+              >
+                <Text style={styles.secondaryLabel}>Capture another</Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
+
+        {hasItems ? (
+          <View
+            style={styles.section}
+            onLayout={(event) => {
+              resultsAnchorY.current = event.nativeEvent.layout.y;
+            }}
+          >
+            <View style={styles.sectionHeader}>
+              <View>
+                <Text style={styles.sectionTitle}>Menu cards</Text>
+                <Text style={styles.sectionHint}>Generated {generatedItemsLabel}</Text>
+              </View>
+              <Pressable onPress={handleReset}>
+                <Text style={styles.sectionAction}>Start new menu</Text>
+              </Pressable>
+            </View>
+
+            <View style={styles.resultsList}>
+              {items.map((item, index) => (
+                <View style={styles.resultCard} key={`${item.name}-${index}`}>
+                  <Image source={{ uri: item.image_url }} style={styles.resultImage} contentFit="cover" />
+                  <View style={styles.resultBody}>
+                    <View style={styles.resultHeading}>
+                      <Text style={styles.resultTitle}>{item.name}</Text>
+                      <Text style={styles.resultPrice}>{item.price}</Text>
+                    </View>
+                    <Text style={styles.resultDescription}>{item.description}</Text>
+                    <Text style={styles.resultBadge}>Page {item.page}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          </View>
+        ) : null}
+
+        {pages.length > 0 ? (
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Source pages</Text>
+              <Text style={styles.sectionHint}>{generatedPagesLabel}</Text>
+            </View>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.pagesStrip}
+              contentContainerStyle={styles.pagesStripContent}
+            >
+              {pages.map((page) => (
+                <View style={styles.pageThumb} key={`${page.page}-${page.url}`}>
+                  <Image source={{ uri: page.url }} style={styles.pageImage} contentFit="cover" />
+                  <Text style={styles.pageCaption}>Page {page.page}</Text>
+                  <Text style={styles.pageName} numberOfLines={1}>
+                    {page.name}
+                  </Text>
+                </View>
+              ))}
+            </ScrollView>
+          </View>
+        ) : null}
+
+        <Text style={styles.footer}>Built with Railway · Flask · Expo</Text>
+      </View>
     </ScrollView>
   );
 }
@@ -462,272 +589,354 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: '#0b1221',
+    backgroundColor: '#080F1F',
   },
-  container: {
-    gap: 24,
+  content: {
+    paddingBottom: 48,
+  },
+  stickyBar: {
+    paddingTop: 48,
+    paddingBottom: 18,
     paddingHorizontal: 20,
-    paddingVertical: 24,
+    gap: 14,
+    backgroundColor: 'rgba(8, 14, 31, 0.96)',
+    borderBottomWidth: 1,
+    borderColor: 'rgba(148, 163, 184, 0.08)',
   },
-  header: {
-    gap: 8,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#f8fafc',
-  },
-  subtitle: {
-    fontSize: 16,
-    color: 'rgba(226, 232, 240, 0.72)',
-  },
-  session: {
-    marginTop: 8,
-    alignSelf: 'flex-start',
-    backgroundColor: 'rgba(148, 163, 184, 0.2)',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 999,
-    color: '#e2e8f0',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  card: {
-    backgroundColor: 'rgba(248, 250, 252, 0.96)',
-    borderRadius: 24,
-    padding: 18,
-    gap: 16,
-    shadowColor: '#0b1221',
-    shadowOpacity: 0.2,
-    shadowRadius: 20,
-    shadowOffset: { width: 0, height: 12 },
-    elevation: 6,
-  },
-  cardHeader: {
+  brandRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 16,
   },
-  cardTitle: {
+  brandTitle: {
+    color: '#F8FAFC',
     fontSize: 20,
     fontWeight: '700',
-    color: '#0f172a',
   },
-  cardHint: {
-    fontSize: 14,
-    color: '#475569',
+  brandTagline: {
+    color: 'rgba(226, 232, 240, 0.66)',
+    fontSize: 13,
+    marginTop: 4,
   },
-  resetButton: {
-    color: '#2563eb',
+  sessionChip: {
+    backgroundColor: 'rgba(59, 130, 246, 0.16)',
+    color: '#BFDBFE',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    fontSize: 12,
     fontWeight: '600',
   },
-  resetButtonDisabled: {
-    opacity: 0.5,
-  },
-  selectorCard: {
-    backgroundColor: 'rgba(248, 250, 255, 0.92)',
-    borderRadius: 20,
-    borderWidth: 2,
-    borderColor: 'rgba(37, 99, 235, 0.25)',
-    paddingVertical: 24,
-    paddingHorizontal: 18,
-    alignItems: 'center',
-    gap: 12,
-  },
-  selectorIcon: {
-    fontSize: 32,
-  },
-  selectorText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#1f2937',
-  },
-  selectorHint: {
-    fontSize: 13,
-    color: '#64748b',
-    textAlign: 'center',
-  },
-  actionRow: {
+  stickyActions: {
     flexDirection: 'row',
     gap: 12,
-    width: '100%',
   },
-  actionButton: {
-    flex: 1,
-    backgroundColor: '#2563eb',
-    borderRadius: 14,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  actionButtonSecondary: {
+  stickyButton: {
     flex: 1,
     borderRadius: 14,
     paddingVertical: 12,
     alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stickyPrimaryButton: {
+    backgroundColor: '#2563EB',
+  },
+  stickyGhostButton: {
     borderWidth: 1,
-    borderColor: 'rgba(37, 99, 235, 0.4)',
-    backgroundColor: '#e0f2fe',
+    borderColor: 'rgba(59, 130, 246, 0.35)',
+    backgroundColor: 'rgba(37, 99, 235, 0.12)',
   },
-  actionButtonDisabled: {
-    opacity: 0.6,
-  },
-  actionLabel: {
-    color: '#fff',
+  stickyPrimaryLabel: {
+    color: '#FFFFFF',
     fontWeight: '600',
   },
-  actionLabelSecondary: {
-    color: '#1d4ed8',
+  stickyGhostLabel: {
+    color: '#BFDBFE',
     fontWeight: '600',
+  },
+  disabledButton: {
+    opacity: 0.55,
+  },
+  body: {
+    paddingHorizontal: 20,
+    paddingTop: 24,
+    gap: 24,
+  },
+  panel: {
+    borderRadius: 24,
+    padding: 24,
+    gap: 16,
+    backgroundColor: 'rgba(13, 23, 42, 0.6)',
+    borderWidth: 1,
+    borderColor: 'rgba(148, 163, 184, 0.08)',
+    shadowColor: '#000000',
+    shadowOpacity: 0.25,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 18 },
+    elevation: 8,
+  },
+  previewPanel: {
+    gap: 20,
+  },
+  panelBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(59, 130, 246, 0.16)',
+    color: '#BFDBFE',
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 999,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  panelTitle: {
+    color: '#F8FAFC',
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  panelSubtitle: {
+    color: 'rgba(203, 213, 225, 0.85)',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  panelMeta: {
+    color: 'rgba(148, 163, 184, 0.8)',
+    fontSize: 13,
+    marginTop: 4,
+  },
+  panelHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 16,
+  },
+  panelActions: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  panelActionText: {
+    color: '#60A5FA',
+    fontWeight: '700',
+  },
+  panelReset: {
+    color: '#FCA5A5',
   },
   previewStrip: {
     flexGrow: 0,
   },
+  previewStripContent: {
+    paddingRight: 6,
+    gap: 12,
+  },
   previewCard: {
-    width: 140,
-    marginRight: 12,
-    borderRadius: 16,
+    width: 160,
+    borderRadius: 20,
     overflow: 'hidden',
-    backgroundColor: '#fff',
+    backgroundColor: 'rgba(15, 23, 42, 0.85)',
+    borderWidth: 1,
+    borderColor: 'rgba(148, 163, 184, 0.12)',
   },
   previewImage: {
     width: '100%',
-    height: 110,
+    height: 140,
   },
   previewInfo: {
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     gap: 4,
   },
   previewName: {
-    fontSize: 12,
+    color: '#E2E8F0',
     fontWeight: '600',
-    color: '#1f2937',
+    fontSize: 13,
   },
   previewSize: {
-    fontSize: 11,
-    color: '#64748b',
+    color: 'rgba(148, 163, 184, 0.75)',
+    fontSize: 12,
   },
-  error: {
-    backgroundColor: '#fee2e2',
-    color: '#b91c1c',
-    borderRadius: 12,
-    padding: 12,
+  previewSummary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    padding: 16,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(148, 163, 184, 0.12)',
+    backgroundColor: 'rgba(15, 23, 42, 0.65)',
+  },
+  previewThumb: {
+    width: 64,
+    height: 64,
+    borderRadius: 14,
+  },
+  previewSummaryBody: {
+    flex: 1,
+    gap: 4,
+  },
+  previewSummaryText: {
+    color: '#F8FAFC',
     fontWeight: '600',
   },
+  previewSummaryHint: {
+    color: 'rgba(148, 163, 184, 0.75)',
+    fontSize: 12,
+  },
   primaryButton: {
-    backgroundColor: '#2563eb',
-    borderRadius: 16,
+    borderRadius: 18,
     paddingVertical: 14,
     alignItems: 'center',
-  },
-  primaryButtonDisabled: {
-    opacity: 0.7,
+    justifyContent: 'center',
+    backgroundColor: '#2563EB',
   },
   primaryLabel: {
-    color: '#fff',
+    color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '700',
   },
-  metaRow: {
+  secondaryRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    gap: 12,
   },
-  metaText: {
-    fontSize: 12,
-    color: '#475569',
+  secondaryButton: {
+    flex: 1,
+    borderRadius: 16,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(37, 99, 235, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(59, 130, 246, 0.35)',
+  },
+  secondaryLabel: {
+    color: '#60A5FA',
+    fontWeight: '600',
+  },
+  error: {
+    marginTop: 4,
+    backgroundColor: 'rgba(239, 68, 68, 0.12)',
+    color: '#FCA5A5',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    fontWeight: '600',
+  },
+  section: {
+    backgroundColor: 'rgba(13, 23, 42, 0.55)',
+    borderRadius: 24,
+    padding: 24,
+    gap: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(148, 163, 184, 0.08)',
   },
   sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  sectionMeta: {
-    fontSize: 14,
-    color: '#64748b',
+  sectionTitle: {
+    color: '#F8FAFC',
+    fontSize: 20,
+    fontWeight: '700',
   },
-  pageGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+  sectionHint: {
+    color: 'rgba(148, 163, 184, 0.8)',
+    fontSize: 13,
+    marginTop: 4,
+  },
+  sectionAction: {
+    color: '#93C5FD',
+    fontWeight: '600',
+  },
+  resultsList: {
+    gap: 16,
+  },
+  resultCard: {
+    borderRadius: 24,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(15, 23, 42, 0.75)',
+    borderWidth: 1,
+    borderColor: 'rgba(148, 163, 184, 0.1)',
+    shadowColor: '#000000',
+    shadowOpacity: 0.25,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 14 },
+    elevation: 6,
+  },
+  resultImage: {
+    width: '100%',
+    height: 220,
+  },
+  resultBody: {
+    padding: 18,
     gap: 12,
   },
-  pageCard: {
-    width: '48%',
-    backgroundColor: '#f1f5f9',
-    borderRadius: 16,
-    padding: 10,
+  resultHeading: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 16,
+  },
+  resultTitle: {
+    flex: 1,
+    color: '#F8FAFC',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  resultPrice: {
+    color: '#60A5FA',
+    fontWeight: '700',
+    fontSize: 16,
+  },
+  resultDescription: {
+    color: 'rgba(203, 213, 225, 0.85)',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  resultBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(37, 99, 235, 0.18)',
+    color: '#BFDBFE',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  pagesStrip: {
+    flexGrow: 0,
+  },
+  pagesStripContent: {
+    paddingRight: 6,
+    gap: 12,
+  },
+  pageThumb: {
+    width: 150,
+    borderRadius: 20,
+    padding: 12,
+    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+    borderWidth: 1,
+    borderColor: 'rgba(148, 163, 184, 0.12)',
     gap: 8,
   },
   pageImage: {
     width: '100%',
     height: 160,
-    borderRadius: 12,
+    borderRadius: 14,
   },
   pageCaption: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#111827',
+    color: '#F8FAFC',
+    fontWeight: '600',
+    fontSize: 13,
   },
   pageName: {
+    color: 'rgba(203, 213, 225, 0.8)',
     fontSize: 12,
-    color: '#475569',
-  },
-  itemGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 16,
-  },
-  itemCard: {
-    width: '100%',
-    borderRadius: 20,
-    backgroundColor: '#ffffff',
-    overflow: 'hidden',
-    elevation: 4,
-    shadowColor: '#0f172a',
-    shadowOpacity: 0.15,
-    shadowRadius: 20,
-    shadowOffset: { width: 0, height: 10 },
-  },
-  itemImage: {
-    width: '100%',
-    height: 200,
-  },
-  itemBody: {
-    padding: 16,
-    gap: 8,
-  },
-  itemHeading: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  itemTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    flex: 1,
-    color: '#0f172a',
-  },
-  itemPrice: {
-    color: '#2563eb',
-    fontWeight: '700',
-    fontSize: 15,
-  },
-  itemDescription: {
-    color: '#475569',
-    fontSize: 14,
-  },
-  badge: {
-    alignSelf: 'flex-start',
-    fontSize: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 999,
-    backgroundColor: '#e0f2fe',
-    color: '#0369a1',
-    fontWeight: '600',
   },
   footer: {
     textAlign: 'center',
-    color: 'rgba(226, 232, 240, 0.7)',
-    marginBottom: 40,
+    color: 'rgba(148, 163, 184, 0.7)',
+    paddingBottom: 32,
+    paddingTop: 8,
+    fontSize: 12,
   },
 });
