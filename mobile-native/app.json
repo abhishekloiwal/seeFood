@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "mobile-native",
+    "name": "See Food",
     "slug": "mobile-native",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -9,7 +9,12 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.abhiloiwal.mobilenative",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "CFBundleDisplayName": "See Food"
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -44,6 +49,13 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "5b3c2164-5f02-4c2d-8f53-cb542750c9cf"
+      }
+    },
+    "owner": "abhiloiwal"
   }
 }

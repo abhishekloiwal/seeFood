@@ -1,7 +1,7 @@
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
 import { Image } from 'expo-image';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -25,10 +25,12 @@ type ProcessedPage = {
 };
 
 type MenuItem = {
+  id: string;
   name: string;
   price: string;
   description: string;
   image_url: string;
+  imageStatus: 'pending' | 'loading' | 'ready' | 'error';
   page: number;
 };
 
@@ -134,8 +136,9 @@ const formatPrice = (raw?: string) => {
     }
   }
 
-  if (best) {
-    return renderCurrency(best.unit, best.amount);
+  if (best !== null) {
+    const { unit, amount } = best as { unit: string; amount: string };
+    return renderCurrency(unit, amount);
   }
 
   const fallback = trimmed.match(/\d[\d.,]*/);
@@ -205,6 +208,7 @@ export default function HomeScreen() {
   const scrollRef = useRef<ScrollView | null>(null);
   const resultsAnchorY = useRef(0);
   const previousItemCount = useRef(0);
+  const generatingItemRef = useRef<string | null>(null);
 
   const hasAssets = selectedAssets.length > 0;
   const hasItems = items.length > 0;
@@ -230,6 +234,79 @@ export default function HomeScreen() {
     }
     previousItemCount.current = items.length;
   }, [hasItems, items.length]);
+
+  useEffect(() => {
+    if (!sessionId) {
+      generatingItemRef.current = null;
+      return;
+    }
+    if (!items.length) {
+      return;
+    }
+    if (generatingItemRef.current) {
+      return;
+    }
+
+    const nextItem = items.find((item) => item.imageStatus === 'pending');
+    if (!nextItem) {
+      return;
+    }
+
+    generatingItemRef.current = nextItem.id;
+    setItems((prev) =>
+      prev.map((entry) =>
+        entry.id === nextItem.id ? { ...entry, imageStatus: 'loading' } : entry,
+      ),
+    );
+
+    (async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/generate-image`, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ sessionId, itemId: nextItem.id }),
+        });
+
+        const data = (await response.json().catch(() => ({}))) as {
+          imageUrl?: string;
+          error?: string;
+        };
+
+        if (!response.ok || !data.imageUrl) {
+          throw new Error(data.error ?? 'Image generation failed.');
+        }
+
+        const resolvedUrl = resolveAssetUrl(data.imageUrl);
+
+        setItems((prev) =>
+          prev.map((entry) =>
+            entry.id === nextItem.id
+              ? { ...entry, image_url: resolvedUrl, imageStatus: 'ready' }
+              : entry,
+          ),
+        );
+      } catch (error) {
+        setItems((prev) =>
+          prev.map((entry) =>
+            entry.id === nextItem.id ? { ...entry, imageStatus: 'error' } : entry,
+          ),
+        );
+      } finally {
+        generatingItemRef.current = null;
+      }
+    })();
+  }, [items, sessionId]);
+
+  const handleRetry = useCallback((itemId: string) => {
+    setItems((prev) =>
+      prev.map((entry) =>
+        entry.id === itemId ? { ...entry, imageStatus: 'pending' } : entry,
+      ),
+    );
+  }, []);
 
   const applyAssets = async (
     incoming: ImagePicker.ImagePickerAsset[],
@@ -289,6 +366,7 @@ export default function HomeScreen() {
   };
 
   const handleReset = () => {
+    generatingItemRef.current = null;
     setSelectedAssets([]);
     setPages([]);
     setItems([]);
@@ -303,6 +381,7 @@ export default function HomeScreen() {
     }
 
     const formData = new FormData();
+    generatingItemRef.current = null;
 
     selectedAssets.forEach((asset, index) => {
       const extension = getExtension(asset.mimeType);
@@ -334,7 +413,15 @@ export default function HomeScreen() {
       const payload = (await response.json().catch(() => ({}))) as {
         sessionId?: string;
         pages?: ProcessedPage[];
-        items?: MenuItem[];
+        items?: Array<{
+          id: string;
+          name: string;
+          price: string;
+          description: string;
+          image_url?: string;
+          imageStatus?: string;
+          page: number;
+        }>;
         error?: string;
       };
 
@@ -347,11 +434,21 @@ export default function HomeScreen() {
         url: resolveAssetUrl(page.url),
       }));
 
-      const resolvedItems = (payload.items ?? []).map((item) => ({
-        ...item,
-        image_url: resolveAssetUrl(item.image_url),
-        price: formatPrice(item.price),
-      }));
+      const resolvedItems: MenuItem[] = (payload.items ?? []).map((item) => {
+        const preparedUrl = resolveAssetUrl(item.image_url);
+        const initialStatus: MenuItem['imageStatus'] =
+          item.imageStatus === 'ready' && preparedUrl ? 'ready' : 'pending';
+
+        return {
+          id: item.id,
+          name: item.name,
+          price: formatPrice(item.price),
+          description: item.description,
+          image_url: preparedUrl,
+          imageStatus: initialStatus,
+          page: item.page,
+        };
+      });
 
       setSessionId(payload.sessionId ?? '');
       setPages(resolvedPages);
@@ -538,9 +635,34 @@ export default function HomeScreen() {
             </View>
 
             <View style={styles.resultsList}>
-              {items.map((item, index) => (
-                <View style={styles.resultCard} key={`${item.name}-${index}`}>
-                  <Image source={{ uri: item.image_url }} style={styles.resultImage} contentFit="cover" />
+              {items.map((item) => (
+                <View style={styles.resultCard} key={item.id}>
+                  <View style={styles.resultImageWrapper}>
+                    {item.imageStatus === 'ready' && item.image_url ? (
+                      <Image source={{ uri: item.image_url }} style={styles.resultImage} contentFit="cover" />
+                    ) : (
+                      <View style={styles.resultImagePlaceholder}>
+                        {item.imageStatus === 'loading' ? (
+                          <>
+                            <ActivityIndicator color="#60A5FA" />
+                            <Text style={styles.placeholderHint}>Generating image...</Text>
+                          </>
+                        ) : item.imageStatus === 'pending' ? (
+                          <>
+                            <ActivityIndicator color="rgba(148, 163, 184, 0.6)" />
+                            <Text style={styles.placeholderHint}>Waiting in queue...</Text>
+                          </>
+                        ) : (
+                          <View style={styles.placeholderErrorBlock}>
+                            <Text style={styles.placeholderErrorText}>Image failed</Text>
+                            <Pressable style={styles.retryButton} onPress={() => handleRetry(item.id)}>
+                              <Text style={styles.retryLabel}>Retry</Text>
+                            </Pressable>
+                          </View>
+                        )}
+                      </View>
+                    )}
+                  </View>
                   <View style={styles.resultBody}>
                     <View style={styles.resultHeading}>
                       <Text style={styles.resultTitle}>{item.name}</Text>
@@ -862,9 +984,23 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 14 },
     elevation: 6,
   },
-  resultImage: {
+  resultImageWrapper: {
     width: '100%',
     height: 220,
+    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  resultImage: {
+    width: '100%',
+    height: '100%',
+  },
+  resultImagePlaceholder: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
   },
   resultBody: {
     padding: 18,
@@ -901,6 +1037,35 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     fontSize: 12,
     fontWeight: '600',
+  },
+  placeholderHint: {
+    color: 'rgba(203, 213, 225, 0.75)',
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  placeholderErrorBlock: {
+    alignItems: 'center',
+    gap: 12,
+  },
+  placeholderErrorText: {
+    color: '#FCA5A5',
+    fontWeight: '700',
+    fontSize: 13,
+    textAlign: 'center',
+  },
+  retryButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(59, 130, 246, 0.55)',
+    backgroundColor: 'rgba(37, 99, 235, 0.18)',
+  },
+  retryLabel: {
+    color: '#BFDBFE',
+    fontWeight: '600',
+    fontSize: 13,
   },
   pagesStrip: {
     flexGrow: 0,

@@ -18,7 +18,6 @@ Environment:
 from __future__ import annotations
 
 import argparse
-import concurrent.futures
 import json
 import os
 import re
@@ -376,10 +375,13 @@ def process_menu(
     fal_model: str,
     fal_image_size: str,
     max_workers: int,
+    generate_images: bool = True,
 ) -> Dict[str, Any]:
     configure_client(api_key)
 
-    if image_provider.lower() == FAL_IMAGE_PROVIDER and not fal_api_key:
+    provider_key = image_provider.lower()
+
+    if generate_images and provider_key == FAL_IMAGE_PROVIDER and not fal_api_key:
         raise ValueError("FAL image generation selected but FAL API key is missing.")
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -388,28 +390,29 @@ def process_menu(
     items = extract_menu_items(menu_payload, model_name=text_model)
 
     metadata: Dict[str, Any] = {"menu_source": str(menu_path), "items": []}
+    _ = max_workers  # sequential generation; keep parameter for compatibility
 
-    def worker(index: int, item_data: Dict[str, str]) -> Dict[str, Any]:
-        image_path = generate_item_image(
-            item=item_data,
-            output_dir=output_dir,
-            seq=index + 1,
-            image_provider=image_provider,
-            image_format=image_format,
-            gemini_model=image_model,
-            fal_api_key=fal_api_key,
-            fal_model=fal_model,
-            fal_image_size=fal_image_size,
-        )
-        return {**item_data, "image_path": str(image_path), "order": index}
+    for index, item_data in enumerate(items):
+        entry: Dict[str, Any] = {**item_data, "order": index}
+        image_path: Path | None = None
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_index = {
-            executor.submit(worker, idx, item): idx for idx, item in enumerate(items)
-        }
-        for future in concurrent.futures.as_completed(future_to_index):
-            item_result = future.result()
-            metadata["items"].append(item_result)
+        if generate_images:
+            image_path = generate_item_image(
+                item=item_data,
+                output_dir=output_dir,
+                seq=index + 1,
+                image_provider=image_provider,
+                image_format=image_format,
+                gemini_model=image_model,
+                fal_api_key=fal_api_key,
+                fal_model=fal_model,
+                fal_image_size=fal_image_size,
+            )
+            entry["image_path"] = str(image_path)
+        else:
+            entry["image_path"] = None
+
+        metadata["items"].append(entry)
 
     metadata["items"].sort(key=lambda entry: entry.pop("order"))
 
